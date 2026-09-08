@@ -648,3 +648,260 @@ body {
     background-color: #dde2e6;
     color: #333;
 }
+/* ============================================================
+   Added for the data-driven dashboard, sync sheet, and grades.
+   Palette matches the existing #007bff / #e0e7ff scheme.
+   ============================================================ */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 20px 16px 20px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.banner.error  { background: #ffecec; color: #a12727; border: 1px solid #ffd0d0; }
+.banner.warn   { background: #fff8e6; color: #7a5800; border: 1px solid #ffe6a8; }
+.banner i      { flex-shrink: 0; }
+
+/* Course chips ------------------------------------------------ */
+
+.course-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 0 20px 16px 20px;
+  scrollbar-width: none;
+}
+
+.course-strip::-webkit-scrollbar { display: none; }
+
+.course-chip {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  background: #fff;
+  border: 1px solid #e8ecf3;
+  border-radius: 12px;
+  text-decoration: none;
+  min-width: 108px;
+}
+
+.course-chip-code  { font-size: 14px; font-weight: 700; color: #1a2b4a; }
+.course-chip-meta  { font-size: 11px; color: #7b8794; }
+
+.course-chip.add {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  color: #0056b3;
+  font-size: 13px;
+  font-weight: 600;
+  background: #e0e7ff;
+  border-color: #cdd8ff;
+}
+
+/* Assignment urgency ------------------------------------------ */
+
+.assign-status.soon    { background: #fff4e0; color: #b26a00; }
+.assign-status.overdue { background: #f0f0f4; color: #6b7280; }
+
+/* Upload feedback --------------------------------------------- */
+
+.upload-status {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.upload-status.info    { background: #eef4ff; color: #23477e; }
+.upload-status.success { background: #e8f7ef; color: #14663c; }
+.upload-status.error   { background: #ffecec; color: #a12727; }
+
+/* Calendar sync sheet ----------------------------------------- */
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 24, 40, 0.45);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 50;
+}
+
+.sheet-card {
+  width: 100%;
+  max-width: 420px;
+  background: #fff;
+  border-radius: 20px 20px 0 0;
+  padding: 24px 22px 30px 22px;
+}
+
+.sheet-card h3 { font-size: 19px; color: #1a2b4a; margin-bottom: 6px; }
+.sheet-card p  { font-size: 13px; color: #5d6b7f; margin-bottom: 16px; }
+
+.sheet-card input {
+  width: 100%;
+  padding: 12px;
+  font-size: 13px;
+  border: 1px solid #e0e5ee;
+  border-radius: 10px;
+  background: #f8f9fb;
+  color: #333;
+  margin-bottom: 14px;
+}
+
+.sheet-actions { display: flex; gap: 10px; }
+
+.sheet-actions .submit-btn {
+  flex: 1;
+  padding: 14px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #4dc0d7 0%, #007bff 100%);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sheet-actions .secondary-btn {
+  flex: 1;
+  padding: 14px;
+  border-radius: 12px;
+  background: #eef1f6;
+  color: #33415c;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+}
+
+.sheet-close {
+  width: 100%;
+  margin-top: 12px;
+  padding: 12px;
+  border: none;
+  background: none;
+  color: #7b8794;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* Grades ------------------------------------------------------ */
+
+.grade-hero {
+  background: #fff;
+  border: 1px solid #e8ecf3;
+  border-radius: 16px;
+  padding: 22px;
+  margin-bottom: 18px;
+}
+
+.grade-figure { display: flex; align-items: baseline; gap: 12px; }
+
+.grade-letter {
+  font-size: 46px;
+  font-weight: 800;
+  line-height: 1;
+  color: #0052cc;
+  letter-spacing: -0.02em;
+}
+
+.grade-pct { font-size: 13px; color: #5d6b7f; }
+
+.grade-bar {
+  height: 6px;
+  background: #eef1f6;
+  border-radius: 3px;
+  margin: 18px 0 10px 0;
+  overflow: hidden;
+}
+
+.grade-bar-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #4dc0d7, #007bff);
+  border-radius: 3px;
+  transition: width 220ms ease;
+}
+
+.grade-legend p { font-size: 12px; color: #7b8794; margin-top: 4px; }
+
+.sim-panel {
+  background: #fff;
+  border: 1px solid #e8ecf3;
+  border-radius: 16px;
+  padding: 18px 20px;
+  margin-bottom: 22px;
+}
+
+.sim-panel h5 { font-size: 15px; color: #1a2b4a; margin-bottom: 12px; }
+
+.sim-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  color: #33415c;
+  padding: 7px 0;
+}
+
+.sim-input { display: flex; align-items: center; gap: 4px; color: #7b8794; }
+
+.sim-input input {
+  width: 62px;
+  padding: 7px 9px;
+  border: 1px solid #e0e5ee;
+  border-radius: 8px;
+  font-size: 14px;
+  text-align: right;
+  color: #1a2b4a;
+}
+
+.sim-result {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #eef1f6;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #33415c;
+}
+
+.sim-result strong { color: #0052cc; }
+
+.score-row { align-items: center; }
+
+.score-input { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+
+.score-input input {
+  width: 58px;
+  padding: 7px 9px;
+  border: 1px solid #e0e5ee;
+  border-radius: 8px;
+  font-size: 14px;
+  text-align: right;
+}
+
+.score-input span { font-size: 12px; color: #7b8794; }
+
+/* Focus visibility, since everything above is interactive. */
+a:focus-visible, button:focus-visible, input:focus-visible {
+  outline: 2px solid #0052cc;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

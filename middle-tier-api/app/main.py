@@ -1,416 +1,413 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-import httpx  # Used to make requests to your AI service
-import PyPDF2 # Example library for PDF text extraction
-from PyPDF2.errors import PdfReadError
-import io
-from docx import Document
-from fastapi.responses import JSONResponse
-import pdfplumber
-from openai import OpenAI
-import os
-from .database import syllabi_collection, tasks_collection
-from .models import SyllabusCreate, Syllabus, ManualTaskCreate, ManualTaskUpdate
-from datetime import datetime, timezone
-from bson import ObjectId
-from dotenv import load_dotenv
-import json
-import re
-from fastapi.middleware.cors import CORSMiddleware #for handling frontend and backend connection
+"""SyllaSync middle tier.
 
+Frontend -> this service -> (OpenAI for extraction, MongoDB for storage).
+
+v1 has no accounts. Every document is written under DEMO_USER_ID so that adding
+real auth later means threading a real id through, not reshaping the data.
+"""
+
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from bson import ObjectId
+from bson.errors import InvalidId
+from dotenv import load_dotenv
+from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+
+from . import extraction, grades
+from .database import ensure_indexes, syllabi_collection, tasks_collection
+from .ics_feed import build_feed
+from .models import (
+    Course,
+    GradeResult,
+    ScoreUpdate,
+    SimulationInput,
+    SyllabusOut,
+    TaskCreate,
+    TaskOut,
+    TaskUpdate,
+    UploadResult,
+)
 
 load_dotenv()
 
+DEMO_USER_ID = "demo"
+
 app = FastAPI(
-    title="AI Student Advisor - Middle Tier",
-    description="Handles PDF uploads, LLM processing, and data management. \n" \
-    "Connecting System",
-    version="1.0.0"
+    title="SyllaSync Middle Tier",
+    description="Syllabus upload, LLM extraction, deadlines, grades, and calendar feeds.",
+    version="1.0.0",
 )
 
-#Frontend to backend connection handling
-origins = ["*"]
+# Explicit origins. "*" plus allow_credentials is rejected by browsers, which is
+# why the old config silently failed.
+allowed_origins = [
+    o.strip()
+    for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:8080,http://127.0.0.1:8080,http://localhost:5500,http://127.0.0.1:5500",
+    ).split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-def clean_llm_json_response(raw: str) -> dict:
-    """
-    Cleans LLM response and returns a parsed JSON object (dict).
-    """
-    # Remove ```json ... ``` fences
-    raw = re.sub(r"```json", "", raw, flags=re.IGNORECASE)
-    raw = re.sub(r"```", "", raw)
-    raw = raw.strip()
-    
-    # Parse into a Python dictionary
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
     try:
-        data_dict = json.loads(raw)
-        return data_dict
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse LLM response as JSON: {e}")
+        ensure_indexes()
+    except Exception as exc:  # noqa: BLE001 - the API still works without indexes
+        print(f"[startup] index creation skipped: {exc}")
+    yield
 
-# URL for your Middle Tier (AI Layer) service
-AI_LAYER_URL = "http://your-middle-tier-service-address/extract-from-syllabus"
 
-# -----------------------------
-# Upload endpoint
-# -----------------------------
-@app.post("/upload-syllabus/")
-async def create_upload_file(file: UploadFile = File(...)):
-    """
-    1. Receives a syllabus file from the Frontend.
-    2. Extracts the raw text.
-    3. Sends the raw text to API for processing.
-    """
-    
-    # Read file contents into memory 
-    contents = await file.read()
+app.router.lifespan_context = lifespan
 
-    # -----------------------------
-    # File size limit (5 MB)
-    MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
-    if len(contents) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="File too large (limit 5MB).")
-    # -----------------------------
 
-    # Receive File and Extract Text 
+# ------------------------------------------------------------------- helpers
+
+
+def _oid(value: str, label: str) -> ObjectId:
     try:
-        raw_text = ""
-        if file.content_type == "application/pdf":
-            pdf_reader = PyPDF2.PdfReader(io.BytesIO(contents))
-            for page in pdf_reader.pages:
-                raw_text += page.extract_text() or ""
-        elif file.filename and file.filename.endswith(".docx"):
-            doc = Document(io.BytesIO(contents))
-            raw_text = "\n".join([p.text for p in doc.paragraphs])
-        else:
-            # Assume plain text for other file types
-            raw_text = contents.decode('utf-8')
-        
-        if not raw_text:
-            raise HTTPException(status_code=400, detail="Could not extract text from file.")
-    except PdfReadError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid PDF file: {e}")
-    except UnicodeDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"File encoding error: {e}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"File processing error: {e}")
-    
+        return ObjectId(value)
+    except (InvalidId, TypeError):
+        raise HTTPException(status_code=400, detail=f"Invalid {label} id: {value}")
 
-    #Build prompt for OpenAI
-    prompt = """
-    You are a helpful assistant that extracts academic deadlines from a syllabus.
-    The syllabus text is below.
-    Please output a JSON with this structure:
 
-    {
-      "course": {
-        "code": "string",
-        "title": "string",
-        "term": "string",
-        "instructor": "string|null",
-        "meeting": "string|null"
-      },
-      "tasks": [
-        {
-          "type": "HOMEWORK|PROJECT|EXAM|QUIZ|READING|OTHER",
-          "title": "string",
-          "dueAt": "YYYY-MM-DDTHH:mm:ssZ|null",
-          "window": {"start":"YYYY-MM-DDTHH:mm:ssZ|null","end":"YYYY-MM-DDTHH:mm:ssZ|null"},
-          "points": "number|null",
-          "weightPct": "number|null",
-          "description": "string|null",
-          "sourceText": "string"
-        }
-      ],
-      "topics": [
-        {"week": "number|null", "title": "string", "readings": ["string"]}
-      ]
+def _iso(value: Any) -> Optional[str]:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=value.tzinfo or timezone.utc).isoformat()
+    return value
+
+
+def _task_out(doc: Dict[str, Any], course: Dict[str, Any] | None = None) -> TaskOut:
+    course = course or {}
+    return TaskOut(
+        id=str(doc["_id"]),
+        syllabusId=str(doc.get("syllabusId", "")),
+        type=doc.get("type") or "OTHER",
+        title=doc.get("title") or "(untitled)",
+        dueAt=doc.get("dueAt"),
+        window=doc.get("window"),
+        points=doc.get("points"),
+        weightPct=doc.get("weightPct"),
+        description=doc.get("description"),
+        sourceText=doc.get("sourceText"),
+        score=doc.get("score"),
+        scoreOutOf=doc.get("scoreOutOf"),
+        courseCode=course.get("code"),
+        courseTitle=course.get("title"),
+    )
+
+
+def _syllabus_or_404(syllabus_id: str) -> Dict[str, Any]:
+    doc = syllabi_collection.find_one({"_id": _oid(syllabus_id, "syllabus")})
+    if not doc:
+        raise HTTPException(status_code=404, detail="No syllabus with that id.")
+    return doc
+
+
+def _tasks_with_course(query: Dict[str, Any]) -> List[TaskOut]:
+    """Load tasks and attach their course info in one pass."""
+    task_docs = list(tasks_collection.find(query))
+    syllabus_ids = {t.get("syllabusId") for t in task_docs if t.get("syllabusId")}
+    courses: Dict[str, Dict[str, Any]] = {}
+    for sid in syllabus_ids:
+        try:
+            doc = syllabi_collection.find_one({"_id": ObjectId(sid)}, {"course": 1})
+        except (InvalidId, TypeError):
+            continue
+        if doc:
+            courses[sid] = doc.get("course") or {}
+
+    out = [_task_out(t, courses.get(t.get("syllabusId"))) for t in task_docs]
+    # Undated tasks sort last rather than blocking the list.
+    out.sort(key=lambda t: (t.dueAt is None, t.dueAt or ""))
+    return out
+
+
+# -------------------------------------------------------------------- health
+
+
+@app.get("/health")
+def health() -> Dict[str, Any]:
+    """Used by the frontend to show an honest 'API offline' state."""
+    try:
+        syllabi_collection.database.client.admin.command("ping")
+        db_ok = True
+    except Exception:  # noqa: BLE001
+        db_ok = False
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "database": db_ok,
+        "llmConfigured": bool(os.getenv("OPENAI_API_KEY")),
     }
-    Syllabus text:
-    """ + f"\n{raw_text[:12000]}" # limit to avoid token overload
 
-    # Call OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    # Send to OpenAI for structured extraction
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",  # you can change to gpt-4.1 or gpt-4o
-            messages=[
-                {"role": "system", "content": "You extract structured academic deadlines from text."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2,
-            response_format={"type": "json_object"} 
+# -------------------------------------------------------------------- upload
+
+
+@app.post("/upload-syllabus/", response_model=UploadResult)
+async def upload_syllabus(file: UploadFile = File(...)) -> UploadResult:
+    """Upload a syllabus, extract its deadlines, and store both in one call.
+
+    The old version stored the syllabus but never the tasks, so the tasks
+    collection stayed empty in the real flow. This writes both.
+    """
+    contents = await file.read()
+    if len(contents) > extraction.MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File is over the {extraction.MAX_FILE_BYTES // (1024 * 1024)}MB limit.",
         )
-        result = response.choices[0].message.content or ""
-        structured_data = clean_llm_json_response(result)
 
-    except Exception as e:
-        '''return JSONResponse(
-            {"error": f"OpenAI API request failed: {e}"},
-            status_code=500
-        ) replace it by the structure of data below.'''
-        structured_data = {
-            "error": f"OpenAI API request failed: {e}",
-            "tasks": [],
-            "topics": []
-        }
+    try:
+        raw_text = extraction.extract_text(contents, file.filename, file.content_type)
+    except extraction.ExtractionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
-    # Insert into Mongo
+    structured, error = extraction.structure_syllabus(raw_text)
     uploaded_at = datetime.now(timezone.utc)
+    course = structured.get("course") or {}
 
-    doc = {
+    syllabus_doc = {
+        "userId": DEMO_USER_ID,
         "filename": file.filename,
         "contentType": file.content_type,
         "rawText": raw_text,
-        "structured": structured_data,
+        "course": course,
+        "topics": structured.get("topics") or [],
         "uploadedAt": uploaded_at,
+        "extractionError": error,
     }
 
     try:
-        insert_result = syllabi_collection.insert_one(doc)
-    except Exception as e:
-        raise HTTPException(status_code = 500, detail=f"MOngodB INSERT FAILED:{e}")
+        syllabus_id = str(syllabi_collection.insert_one(syllabus_doc).inserted_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"Could not reach the database: {exc}")
 
-    # Return inserted ID
-    return {
-        "id": str(insert_result.inserted_id),
-        "filename": file.filename,
-        "uploadedAt": uploaded_at.isoformat(),
-        "structured": structured_data,
-    }
-     #structured_data = clean_llm_json_response(result)
-    #Return structured JSON
-    #return JSONResponse({"structured_data": result})
-    #return structured_data
+    task_docs = [
+        {
+            "syllabusId": syllabus_id,
+            "userId": DEMO_USER_ID,
+            "type": t.get("type") or "OTHER",
+            "title": t.get("title") or "(untitled)",
+            "dueAt": t.get("dueAt"),
+            "window": t.get("window"),
+            "points": t.get("points"),
+            "weightPct": t.get("weightPct"),
+            "description": t.get("description"),
+            "sourceText": t.get("sourceText"),
+            "score": None,
+            "scoreOutOf": None,
+        }
+        for t in structured.get("tasks") or []
+    ]
+    if task_docs:
+        tasks_collection.insert_many(task_docs)
 
-@app.post("/syllabi", response_model=Syllabus)
-def create_syllabus_entry(syllabus: SyllabusCreate):
-    # 1. Convert Pydantic model -> dict
-    doc = syllabus.model_dump()  # {'userId', 'courseName', 'term', 'rawText'}
-
-    # 2. Add timestamp
-    uploadedAt = datetime.utcnow()
-    doc["uploadedAt"] = uploadedAt
-
-    # 3. Insert into MongoDB
-    result = syllabi_collection.insert_one(doc)
-
-    # 4. Build Syllabus response
-    return Syllabus(
-        id=str(result.inserted_id),
-        **doc,            # includes uploadedAt, userId, courseName, term, rawText
-    )
-
-@app.get("/syllabi/{syllabus_id}", response_model=Syllabus)
-def get_syllabus_entry(syllabus_id: str):
-    try:
-        oid = ObjectId(syllabus_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid syllabus id format")
-
-    doc = syllabi_collection.find_one({"_id": oid})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Syllabus not found")
-
-    doc["_id"] = str(doc["_id"])
-    doc.pop("_id", None)
-    return Syllabus(**doc)
-
-#Temporary in-memory store (replace with DB later)
-CALENDAR_EVENTS = []
-
-@app.post("/calendar/import")
-async def import_events(structured_data: dict):
-    """
-    Accepts structured syllabus JSON and converts tasks into calendar events
-    """
-    events = []
-
-    for task in structured_data.get("tasks", []):
-        if task.get("dueAt"):
-            events.append({
-                "title": task["title"],
-                "type": task["type"],
-                "start": task["dueAt"],
-                "description": task.get("description"),
-            })
-
-    CALENDAR_EVENTS.extend(events)
-    return {"added": len(events)}
-
-
-@app.get("/calendar/events")
-async def get_calendar_events():
-    return CALENDAR_EVENTS
-    
-@app.post("/syllabi/{syllabus_id}/tasks")
-async def save_tasks_for_syllabus(syllabus_id: str, structured_data: dict):
-    """
-    Persist extracted tasks for a given syllabus into MongoDB.
-
-    - `syllabus_id` should be the ID returned from POST /syllabi.
-    - `structured_data` is the JSON returned by /upload-syllabus/ (or the LLM),
-      containing a `tasks` array.
-    """
-    try:
-        oid = ObjectId(syllabus_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid syllabus id format")
-
-    syllabus_doc = syllabi_collection.find_one({"_id": oid})
-    if not syllabus_doc:
-        raise HTTPException(status_code=404, detail="Syllabus not found")
-
-    tasks = structured_data.get("tasks", [])
-    if not tasks:
-        return {"inserted": 0}
-
-    docs_to_insert = []
-    for task in tasks:
-        docs_to_insert.append(
-            {
-                "syllabusId": syllabus_id,
-                "type": task.get("type"),
-                "title": task.get("title"),
-                "dueAt": task.get("dueAt"),
-                "window": task.get("window"),
-                "points": task.get("points"),
-                "weightPct": task.get("weightPct"),
-                "description": task.get("description"),
-                "sourceText": task.get("sourceText"),
-            }
+    if error:
+        # Surface the failure instead of returning 200 with an empty result.
+        raise HTTPException(
+            status_code=502,
+            detail={"message": error, "syllabusId": syllabus_id},
         )
 
-    if not docs_to_insert:
-        return {"inserted": 0}
-
-    result = tasks_collection.insert_many(docs_to_insert)
-    return {"inserted": len(result.inserted_ids)}
-
-
-# -----------------------------
-# Manual task insert & update (when syllabus doesn't list all assignments)
-# -----------------------------
-
-@app.get("/syllabi/{syllabus_id}/tasks")
-async def get_tasks_for_syllabus(syllabus_id: str):
-    """
-    List all tasks (assignments, due dates, etc.) for a syllabus.
-    Use this to show what's stored and to support edit/update flows.
-    """
-    try:
-        oid = ObjectId(syllabus_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid syllabus id format")
-
-    syllabus_doc = syllabi_collection.find_one({"_id": oid})
-    if not syllabus_doc:
-        raise HTTPException(status_code=404, detail="Syllabus not found")
-
-    cursor = tasks_collection.find({"syllabusId": syllabus_id}).sort("dueAt", 1)
-    tasks = []
-    for doc in cursor:
-        doc["id"] = str(doc.pop("_id"))
-        tasks.append(doc)
-    return {"tasks": tasks}
+    return UploadResult(
+        id=syllabus_id,
+        course=Course(**course),
+        taskCount=len(task_docs),
+        tasks=_tasks_with_course({"syllabusId": syllabus_id}),
+        topics=structured.get("topics") or [],
+        uploadedAt=uploaded_at.isoformat(),
+    )
 
 
-@app.post("/syllabi/{syllabus_id}/tasks/manual")
-async def add_manual_task(syllabus_id: str, task: ManualTaskCreate):
-    """
-    Manually add a single task (assignment, exam, etc.) for a syllabus
-    when the syllabus doesn't include it or the user wants to add more.
-    """
-    try:
-        oid = ObjectId(syllabus_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid syllabus id format")
+# ------------------------------------------------------------------ syllabi
 
-    syllabus_doc = syllabi_collection.find_one({"_id": oid})
-    if not syllabus_doc:
-        raise HTTPException(status_code=404, detail="Syllabus not found")
 
-    doc = {
+@app.get("/syllabi", response_model=List[SyllabusOut])
+def list_syllabi() -> List[SyllabusOut]:
+    """Every course the student has uploaded. Drives the dashboard."""
+    out = []
+    for doc in syllabi_collection.find({"userId": DEMO_USER_ID}).sort("uploadedAt", -1):
+        sid = str(doc["_id"])
+        out.append(
+            SyllabusOut(
+                id=sid,
+                userId=doc.get("userId", DEMO_USER_ID),
+                filename=doc.get("filename"),
+                contentType=doc.get("contentType"),
+                course=Course(**(doc.get("course") or {})),
+                taskCount=tasks_collection.count_documents({"syllabusId": sid}),
+                uploadedAt=_iso(doc.get("uploadedAt")),
+                extractionError=doc.get("extractionError"),
+            )
+        )
+    return out
+
+
+@app.get("/syllabi/{syllabus_id}", response_model=SyllabusOut)
+def get_syllabus(syllabus_id: str) -> SyllabusOut:
+    doc = _syllabus_or_404(syllabus_id)
+    return SyllabusOut(
+        id=str(doc["_id"]),
+        userId=doc.get("userId", DEMO_USER_ID),
+        filename=doc.get("filename"),
+        contentType=doc.get("contentType"),
+        course=Course(**(doc.get("course") or {})),
+        taskCount=tasks_collection.count_documents({"syllabusId": syllabus_id}),
+        uploadedAt=_iso(doc.get("uploadedAt")),
+        extractionError=doc.get("extractionError"),
+    )
+
+
+@app.delete("/syllabi/{syllabus_id}")
+def delete_syllabus(syllabus_id: str) -> Dict[str, Any]:
+    """Remove a course and everything extracted from it."""
+    _syllabus_or_404(syllabus_id)
+    removed = tasks_collection.delete_many({"syllabusId": syllabus_id}).deleted_count
+    syllabi_collection.delete_one({"_id": _oid(syllabus_id, "syllabus")})
+    return {"id": syllabus_id, "deletedTasks": removed}
+
+
+# -------------------------------------------------------------------- tasks
+
+
+@app.get("/tasks", response_model=List[TaskOut])
+def list_all_tasks(
+    upcomingOnly: bool = Query(False, description="Hide anything already past due"),
+) -> List[TaskOut]:
+    """Every deadline across every course, in due-date order."""
+    tasks = _tasks_with_course({"userId": DEMO_USER_ID})
+    if upcomingOnly:
+        today = datetime.now(timezone.utc).date().isoformat()
+        tasks = [t for t in tasks if t.dueAt and t.dueAt[:10] >= today]
+    return tasks
+
+
+@app.get("/syllabi/{syllabus_id}/tasks", response_model=List[TaskOut])
+def list_tasks_for_syllabus(syllabus_id: str) -> List[TaskOut]:
+    _syllabus_or_404(syllabus_id)
+    return _tasks_with_course({"syllabusId": syllabus_id})
+
+
+@app.post("/syllabi/{syllabus_id}/tasks", response_model=TaskOut, status_code=201)
+def add_task(syllabus_id: str, task: TaskCreate) -> TaskOut:
+    """Add a deadline the syllabus left out."""
+    syllabus = _syllabus_or_404(syllabus_id)
+    doc = task.model_dump()
+    doc.update({
         "syllabusId": syllabus_id,
-        "type": task.type,
-        "title": task.title,
-        "dueAt": task.dueAt,
-        "window": task.window.model_dump() if task.window else None,
-        "points": task.points,
-        "weightPct": task.weightPct,
-        "description": task.description,
-        "sourceText": task.sourceText,
-    }
-    result = tasks_collection.insert_one(doc)
-    return {"id": str(result.inserted_id), "inserted": 1}
+        "userId": DEMO_USER_ID,
+        "score": None,
+        "scoreOutOf": None,
+    })
+    doc["_id"] = tasks_collection.insert_one(doc).inserted_id
+    return _task_out(doc, syllabus.get("course"))
 
 
-@app.put("/tasks/{task_id}")
-async def update_task(task_id: str, task: ManualTaskCreate):
-    """
-    Full update of an existing task. Send all fields you want to keep.
-    """
-    try:
-        oid = ObjectId(task_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid task id format")
-
-    existing = tasks_collection.find_one({"_id": oid})
-    if not existing:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    update_doc = {
-        "type": task.type,
-        "title": task.title,
-        "dueAt": task.dueAt,
-        "window": task.window.model_dump() if task.window else None,
-        "points": task.points,
-        "weightPct": task.weightPct,
-        "description": task.description,
-        "sourceText": task.sourceText,
-    }
-    tasks_collection.update_one({"_id": oid}, {"$set": update_doc})
-    return {"id": task_id, "updated": 1}
+@app.patch("/tasks/{task_id}", response_model=TaskOut)
+def update_task(task_id: str, task: TaskUpdate) -> TaskOut:
+    oid = _oid(task_id, "task")
+    if not tasks_collection.find_one({"_id": oid}):
+        raise HTTPException(status_code=404, detail="No task with that id.")
+    changes = task.model_dump(exclude_unset=True)
+    if changes:
+        tasks_collection.update_one({"_id": oid}, {"$set": changes})
+    doc = tasks_collection.find_one({"_id": oid})
+    course = syllabi_collection.find_one(
+        {"_id": _oid(doc["syllabusId"], "syllabus")}, {"course": 1}
+    ) or {}
+    return _task_out(doc, course.get("course"))
 
 
-@app.patch("/tasks/{task_id}")
-async def patch_task(task_id: str, task: ManualTaskUpdate):
-    """
-    Partial update of an existing task. Only send fields you want to change.
-    """
-    try:
-        oid = ObjectId(task_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid task id format")
+@app.put("/tasks/{task_id}/score", response_model=TaskOut)
+def set_score(task_id: str, score: ScoreUpdate) -> TaskOut:
+    """Record what you actually got. This is what feeds the grade simulator."""
+    oid = _oid(task_id, "task")
+    doc = tasks_collection.find_one({"_id": oid})
+    if not doc:
+        raise HTTPException(status_code=404, detail="No task with that id.")
 
-    existing = tasks_collection.find_one({"_id": oid})
-    if not existing:
-        raise HTTPException(status_code=404, detail="Task not found")
+    out_of = score.scoreOutOf or doc.get("points") or 100.0
+    if score.score is not None and score.score < 0:
+        raise HTTPException(status_code=400, detail="Score cannot be negative.")
 
-    update_doc = task.model_dump(exclude_unset=True)
-    # Pydantic serializes nested TaskWindow to dict; ensure no BaseModel in payload
-    if "window" in update_doc and hasattr(update_doc["window"], "model_dump"):
-        update_doc["window"] = update_doc["window"].model_dump()
-    tasks_collection.update_one({"_id": oid}, {"$set": update_doc})
-    return {"id": task_id, "updated": 1}
+    tasks_collection.update_one(
+        {"_id": oid},
+        {"$set": {"score": score.score, "scoreOutOf": None if score.score is None else out_of}},
+    )
+    updated = tasks_collection.find_one({"_id": oid})
+    course = syllabi_collection.find_one(
+        {"_id": _oid(updated["syllabusId"], "syllabus")}, {"course": 1}
+    ) or {}
+    return _task_out(updated, course.get("course"))
 
 
 @app.delete("/tasks/{task_id}")
-async def delete_task(task_id: str):
-    """Remove a task (e.g. one that was added manually by mistake)."""
-    try:
-        oid = ObjectId(task_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid task id format")
-
-    result = tasks_collection.delete_one({"_id": oid})
+def delete_task(task_id: str) -> Dict[str, Any]:
+    result = tasks_collection.delete_one({"_id": _oid(task_id, "task")})
     if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="No task with that id.")
     return {"id": task_id, "deleted": 1}
+
+
+# -------------------------------------------------------------------- grades
+
+
+@app.get("/syllabi/{syllabus_id}/grade", response_model=GradeResult)
+def current_grade(syllabus_id: str) -> GradeResult:
+    """Where the student stands right now, using recorded scores only."""
+    _syllabus_or_404(syllabus_id)
+    tasks = [t.model_dump() for t in _tasks_with_course({"syllabusId": syllabus_id})]
+    return grades.compute(tasks, SimulationInput())
+
+
+@app.post("/syllabi/{syllabus_id}/grade/simulate", response_model=GradeResult)
+def simulate_grade(
+    syllabus_id: str, sim: SimulationInput = Body(default=SimulationInput())
+) -> GradeResult:
+    """What-if: assume scores on what's left, or ask what you need for a target."""
+    _syllabus_or_404(syllabus_id)
+    tasks = [t.model_dump() for t in _tasks_with_course({"syllabusId": syllabus_id})]
+    return grades.compute(tasks, sim)
+
+
+# ------------------------------------------------------------------ calendar
+
+
+def _ics_response(tasks: List[TaskOut], name: str, filename: str) -> Response:
+    body = build_feed([t.model_dump() for t in tasks], calendar_name=name)
+    return Response(
+        content=body,
+        media_type="text/calendar; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/calendar.ics")
+def calendar_feed() -> Response:
+    """Subscribe to this URL from Google, Apple, or Outlook Calendar."""
+    return _ics_response(_tasks_with_course({"userId": DEMO_USER_ID}), "SyllaSync", "syllasync.ics")
+
+
+@app.get("/syllabi/{syllabus_id}/calendar.ics")
+def syllabus_calendar_feed(syllabus_id: str) -> Response:
+    """One course's deadlines, so students can subscribe per class."""
+    doc = _syllabus_or_404(syllabus_id)
+    course = doc.get("course") or {}
+    name = course.get("code") or course.get("title") or "SyllaSync"
+    return _ics_response(
+        _tasks_with_course({"syllabusId": syllabus_id}), name, f"{name.replace(' ', '_')}.ics"
+    )

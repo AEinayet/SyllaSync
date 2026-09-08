@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grades - SyllaSync</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="upload-page">
+    <div class="app-container">
+        <div class="header">
+            <div class="header-content">
+                <a href="mainScreen.html" class="back-btn"><i class="fa-solid fa-chevron-left"></i></a>
+                <div class="header-text" id="course-title">Grades</div>
+            </div>
+        </div>
+
+        <div class="content-body">
+            <div class="banner" id="banner" style="display:none;"></div>
+
+            <div class="grade-hero">
+                <div class="grade-figure">
+                    <div class="grade-letter" id="grade-letter">&ndash;</div>
+                    <div class="grade-pct" id="grade-pct">Nothing graded yet</div>
+                </div>
+                <div class="grade-bar"><div class="grade-bar-fill" id="grade-bar-fill"></div></div>
+                <div class="grade-legend" id="grade-legend"></div>
+            </div>
+
+            <div class="sim-panel">
+                <h5>What if</h5>
+                <label class="sim-row">
+                    <span>I score this on everything left</span>
+                    <span class="sim-input"><input type="number" id="assumed" min="0" max="100" value="85">%</span>
+                </label>
+                <label class="sim-row">
+                    <span>I want to finish with at least</span>
+                    <span class="sim-input"><input type="number" id="target" min="0" max="100" value="90">%</span>
+                </label>
+                <div class="sim-result" id="sim-result"></div>
+            </div>
+
+            <div class="section-header" style="margin: 4px 0 10px;">
+                <div class="section-title" style="font-size: 16px;">Enter your scores</div>
+            </div>
+            <div id="task-scores"></div>
+
+            <div class="footer-actions" style="padding-left:0;padding-right:0;">
+                <a class="secondary-btn" id="course-ics" download>Download this course's calendar</a>
+            </div>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script src="api.js"></script>
+    <script src="grades.js"></script>
+</body>
+</html>

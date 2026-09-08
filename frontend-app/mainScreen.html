@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SyllaSync</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+
+        <div class="header">
+            <div class="header-top">
+                <div class="header-text">Your semester<br><span>All deadlines, one place</span></div>
+                <button class="header-avatar" id="syncBtn" title="Sync to your calendar">
+                    <i class="fa-regular fa-calendar-plus"></i>
+                </button>
+            </div>
+
+            <div class="calendar-controls">
+                <div class="current-month" id="monthLabel">&nbsp;</div>
+                <button class="view-toggle-btn" id="viewToggleBtn">View month</button>
+            </div>
+        </div>
+
+        <div class="banner" id="banner" style="display:none;"></div>
+
+        <div class="course-strip" id="course-strip"></div>
+
+        <div class="calendar-wrapper">
+            <div class="calendar-strip" id="weekView"></div>
+            <div class="calendar-month" id="monthView"></div>
+        </div>
+
+        <div class="schedule-container" id="day-panel">
+            <div class="section-header">
+                <div class="section-title" id="day-panel-title">Due today</div>
+            </div>
+            <div id="day-panel-body"></div>
+        </div>
+
+        <div class="assignments-section">
+            <div class="section-header" style="margin-bottom: 10px;">
+                <div class="section-title" style="font-size: 16px;">Coming up</div>
+                <div class="class-count" id="assignment-count"></div>
+            </div>
+            <div id="assignment-list"></div>
+        </div>
+
+        <a href="pdfSubmission.html" class="fab" title="Upload a syllabus">
+            <i class="fa-solid fa-plus"></i>
+        </a>
+    </div>
+
+    <div class="sheet" id="sync-sheet" style="display:none;">
+        <div class="sheet-card">
+            <h3>Sync to your calendar</h3>
+            <p>Subscribe to this link in Google, Apple, or Outlook Calendar. Your
+               deadlines stay up to date as you upload more syllabi.</p>
+            <input type="text" id="sync-url" readonly>
+            <div class="sheet-actions">
+                <button class="submit-btn" id="sync-copy">Copy link</button>
+                <a class="secondary-btn" id="sync-download" download>Download .ics</a>
+            </div>
+            <button class="sheet-close" id="sync-close">Close</button>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script src="api.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

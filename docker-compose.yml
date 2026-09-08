@@ -6,6 +6,11 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   api:
     build: ./middle-tier-api
@@ -15,13 +20,27 @@ services:
     environment:
       MONGO_URI: mongodb://mongo:27017
       MONGO_DB_NAME: SyllaSync_LocalDB
+      ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
     env_file:
       - ./middle-tier-api/app/.env
     depends_on:
-      - mongo
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+      mongo:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./middle-tier-api:/app
+
+  # Serving the frontend over http (rather than opening it from the file
+  # system) is what makes CORS behave and the fetch calls work.
+  web:
+    image: nginx:alpine
+    container_name: syllasync-web
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend-app:/usr/share/nginx/html:ro
+    depends_on:
+      - api
 
 volumes:
   mongo_data:

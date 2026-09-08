@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload a syllabus - SyllaSync</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="upload-page">
+    <div class="app-container">
+        <div class="header">
+            <div class="header-content">
+                <a href="mainScreen.html" class="back-btn"><i class="fa-solid fa-chevron-left"></i></a>
+                <div class="header-text">Upload a syllabus</div>
+            </div>
+        </div>
+
+        <div class="content-body">
+            <div class="upload-card" id="drop-zone">
+                <div class="upload-icon"><i class="fa-solid fa-file-lines"></i></div>
+                <h4>Choose your syllabus</h4>
+                <p>PDF, Word, or plain text. Every graded item gets pulled out automatically.</p>
+                <input type="file" id="file-input" accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain">
+                <label for="file-input" class="select-btn">Browse files</label>
+            </div>
+
+            <div class="file-preview" id="file-preview">
+                <i class="fa-solid fa-file-lines"></i>
+                <span id="file-name"></span>
+                <i class="fa-solid fa-circle-check file-check"></i>
+            </div>
+
+            <div class="upload-status" id="upload-status" style="display:none;"></div>
+
+            <div class="requirements">
+                <h5>What works best</h5>
+                <div class="req-item"><i class="fa-solid fa-circle-check"></i>
+                    <span>A PDF with selectable text, not a scan or photo</span></div>
+                <div class="req-item"><i class="fa-solid fa-circle-check"></i>
+                    <span>The course schedule and grading breakdown included</span></div>
+                <div class="req-item"><i class="fa-solid fa-circle-check"></i>
+                    <span>Under 10MB</span></div>
+            </div>
+        </div>
+
+        <div class="footer-actions">
+            <button class="submit-btn" id="submit-btn">Extract deadlines</button>
+            <a href="mainScreen.html" class="secondary-btn">Cancel</a>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script src="api.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

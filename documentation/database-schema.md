@@ -1,42 +1,51 @@
-# Data Schema
-The structure and blueprint for all tables and data fields. Details every database table, field name, and data type
+# Data model
 
+MongoDB, two collections. The Postgres DDL that used to be in this file
+described a schema the application never used.
 
-# ========================================
-# Table: users
-# Description: Stores user account information.
-# ========================================
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT UNIQUE NOT NULL,       # Used for login, unique
-    password_hash TEXT NOT NULL,      
-    created_at TIMESTAMP DEFAULT NOW()
-);
+## `syllabi`
 
-# ========================================
-# Table: syllabus
-# Description: Stores uploaded syllabus files and metadata.
-# ========================================
-CREATE TABLE syllabus (
-    id SERIAL PRIMARY KEY,
-    user_id INT REFERENCES users(id) ON DELETE CASCADE, # Foreign key to the user
-    course_name TEXT NOT NULL,                          # e.g., "Intro to Computer Science"
-    term TEXT,                                          # e.g., "Fall 2025"
-    raw_text TEXT,                                      # The full text extracted from the file
-    uploaded_at TIMESTAMP DEFAULT NOW()
-);
+One document per uploaded file.
 
-# ========================================
-# Table: deadlines
-# Description: Stores individual tasks and deadlines extracted from each syllabus.
-# ========================================
-CREATE TABLE deadlines (
-    id SERIAL PRIMARY KEY,
-    syllabus_id INT REFERENCES syllabus(id) ON DELETE CASCADE, # Foreign key to the syllabus
-    task_type TEXT,                                           # e.g., "Assignment", "Exam", "Quiz"
-    task_name TEXT,                                           # e.g., "Homework 1", "Midterm Exam"
-    due_date DATE,                                            # The date the task is due
-    weight TEXT,                                              # e.g., "15%", "100 points"
-    notes TEXT                                                # Any extra notes from the LLM
-);
+| Field | Type | Notes |
+| :--- | :--- | :--- |
+| `_id` | ObjectId | Exposed to clients as the string `id` |
+| `userId` | string | Always `"demo"` in v1; the seam for real accounts |
+| `filename` | string | As uploaded |
+| `contentType` | string | MIME type from the upload |
+| `rawText` | string | Full extracted text, kept for re-processing |
+| `course` | object | `{ code, title, term, instructor, meeting }` |
+| `topics` | array | `{ week, title, readings[] }` from the LLM |
+| `uploadedAt` | datetime | UTC |
+| `extractionError` | string \| null | Set when the LLM call failed |
+
+## `tasks`
+
+One document per graded item. Written by the upload endpoint and by manual entry.
+
+| Field | Type | Notes |
+| :--- | :--- | :--- |
+| `_id` | ObjectId | Exposed as `id` |
+| `syllabusId` | string | The parent syllabus `_id` as a string |
+| `userId` | string | Denormalised for cross-course queries |
+| `type` | string | `HOMEWORK`, `PROJECT`, `EXAM`, `QUIZ`, `READING`, `OTHER` |
+| `title` | string | |
+| `dueAt` | string \| null | ISO 8601, or `YYYY-MM-DD` for date-only |
+| `window` | object \| null | `{ start, end }` for exams with a sitting time |
+| `points` | number \| null | Points possible |
+| `weightPct` | number \| null | Percent of the final grade |
+| `description` | string \| null | |
+| `sourceText` | string \| null | The syllabus line this came from |
+| `score` | number \| null | What the student actually got |
+| `scoreOutOf` | number \| null | Denominator for `score` |
+
+Dates are stored as strings exactly as the LLM returns them, so the source is
+never lost to a parsing guess. Parsing happens at the edges, in `ics_feed.py`
+and in the frontend.
+
+## Indexes
+
+Created on startup by `ensure_indexes()`:
+
+- `tasks`: `(syllabusId, dueAt)` and `(dueAt)`
+- `syllabi`: `(userId, uploadedAt)`
